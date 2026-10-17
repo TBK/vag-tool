@@ -1,0 +1,13 @@
+# Reference material: third-party clones, a 682 MB pile including retail
+# packages that are not ours to redistribute. See docs/PROTOCOL.md.
+RESEARCH/
+
+# Rust
+target/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs from the car
+*.csv
