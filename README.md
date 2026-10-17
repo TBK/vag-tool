@@ -4,16 +4,24 @@ KWP2000-over-TP2.0 diagnostics for an Audi A3 8P 2.0 TDI PD (engine code BMN,
 Siemens PPD1.x) using a raw USB-CAN adapter on Linux SocketCAN, such as the
 [8devices Korlan](https://www.8devices.com/products/korlan).
 
-Pure standard library: no python-can, no can-utils needed to run it.
-Verified end to end over a `vcan0` interface against the bundled simulated ECU -
+Rust, edition 2024, needs 1.99 or newer. The CAN layer is the
+[`automotive`](https://crates.io/crates/automotive) crate, so the same code
+reaches a SocketCAN interface today and a panda, Vector or J2534 device later;
+everything above it - VW TP2.0 and VAG's KWP2000 dialect - is in this crate.
+
+Verified end to end over a `vcan0` interface against the built-in simulated ECU:
 the frames it puts on the wire match the TP2.0 examples in jazdw's write-up byte
 for byte. **Not yet tested against the car.**
 
+```sh
+cargo build --release
+./target/release/vag-tool --help
+./target/release/vag-tool -c can0 status
+./target/release/vag-tool -c can0 monitor --csv regen.csv
 ```
-python -m vagtool --help
-python -m vagtool -c can0 status
-python -m vagtool -c can0 monitor --csv regen.csv
-```
+
+Below, `vag-tool` means that binary (`cargo install --path .` puts it on your
+PATH).
 
 ## What works today
 
@@ -23,7 +31,7 @@ python -m vagtool -c can0 monitor --csv regen.csv
 | `status` | reads groups 002, 070, 075 once and checks the regeneration prerequisites |
 | `monitor` | polls groups 070 + 075 (and 002 every 5th sample) during the drive, prints a line per sample, optional CSV |
 | `blocks N [N...]` | reads arbitrary measuring block groups, `--watch` to loop |
-| `dtc [--labels X]` | reads fault memory, decodes VAG/SAE codes and status, names them from a VAG text table if you point at one |
+| `dtc [--labels X]` | reads fault memory, decodes VAG/SAE codes and status, names them from VAG's text table if `assets/labels/` is there |
 | `freeze-frame` | fault environment data: mileage, date, priority, driving cycle |
 | `clear-dtc` | clears the fault memory |
 | `security-access CODE` | logs in with a numeric code, VCDS function 16 (`27 03` / `27 04`) |
@@ -32,6 +40,17 @@ python -m vagtool -c can0 monitor --csv regen.csv
 | `raw '21 46'` | sends one KWP2000 request; anything that is not a known read-only service needs `--write` |
 | `decode-log FILE` | reassembles a sniffed candump log into KWP2000 messages, flagging everything that is not a plain read |
 | `simecu` | runs a fake PPD1 ECU on a vcan interface, for working without the car |
+
+`vag-tool` is one binary with no runtime dependencies; `--debug` prints every
+CAN frame, including traffic that is not ours.
+
+A second, independent program lives in `tools/extract-labels`: it lifts VAG's
+text table out of an Android package so faults get names. It shares no code
+with `vag-tool` and builds on its own.
+
+```sh
+cargo build --release --workspace     # both binaries
+```
 
 ## Connecting the Korlan
 
@@ -75,20 +94,31 @@ high-speed CAN pair is actually on those pins.
 ```sh
 sudo ip link set can0 type can bitrate 500000
 sudo ip link set can0 up
-python -m vagtool -c can0 info
+vag-tool -c can0 info
 ```
 
 The powertrain CAN on this car is 500 kbit/s. The engine ECU is TP2.0 logical
-module `0x01`; the gateway is `0x1F`.
+module `0x01`; the gateway is `0x19`. `vag-tool modules` lists all 89 by
+name, and `-m` takes a name (`engine`, `gateway`), a VAG symbol (`DID_19`) or
+an address (`0x19`); a bare number is decimal.
 
 To work without the car:
 
 ```sh
 sudo modprobe vcan
 sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
-python -m vagtool -c vcan0 simecu &          # fake ECU
-python -m vagtool -c vcan0 status
-python -m vagtool -c vcan0 --debug blocks 75  # see every TP2.0 frame
+vag-tool -c vcan0 simecu &            # fake ECU
+vag-tool -c vcan0 status
+vag-tool -c vcan0 --debug blocks 75   # see every TP2.0 frame
+```
+
+Run only one simulator at a time: two of them answer every request twice, and
+the replies interleave into nonsense.
+
+Tests need no hardware - they drive the simulator over an in-memory bus:
+
+```sh
+cargo test
 ```
 
 ## Starting the regeneration
@@ -110,13 +140,12 @@ The procedure for PD/PPD engines, from the
    exhaust temperatures and field 3 the filter load. `vagtool monitor` shows
    all of these and logs them.
 
-Step 2 has two routes, both now implemented. `docs/PROTOCOL.md` records the
-byte layouts and where each came from.
+Step 2 has two routes, both now implemented.
 
 ### Route 1: try security access first (harmless, no writes)
 
 ```sh
-python -m vagtool -c can0 security-access 21295
+vag-tool -c can0 security-access 21295
 ```
 
 This is a seed-and-key exchange, not a write: the ECU either accepts the code
@@ -125,7 +154,7 @@ just `(code + seed) mod 2^32`. If the ECU accepts it, try the basic-setting
 route, which is what the tooling uses on engines that support it:
 
 ```sh
-python -m vagtool -c can0 basic-settings 70 --code 21295 --monitor --csv regen.csv
+vag-tool -c can0 basic-settings 70 --code 21295 --monitor --csv regen.csv
 ```
 
 A refusal is informative rather than a dead end, because VAG's codes are
@@ -143,13 +172,13 @@ Coding-II is a write to the ECU's coding:
 
 Two things stop this being guessable. The request embeds **the ECU's own
 software version**, so a sequence captured from another car is wrong for yours.
-And the four bytes after `9A` are not understood here - OBDeleven uses
+And the four bytes after `9A` are not understood here - some tools uses
 `05 97 38 DE` for a control unit's coding but different values elsewhere, so
 they have to be read off a capture of this ECU. Once you have them, the tool
 assembles the rest:
 
 ```sh
-python -m vagtool coding2 --code 21295 --sw-version 0003 --prefix 059738DE
+vag-tool coding2 --code 21295 --sw-version 0003 --prefix 059738DE
 #   3b 9a 05 97 38 de 30 39 30 30 30 33 03 00 53 2f      (printed, not sent)
 ```
 
@@ -165,13 +194,13 @@ It only transmits with `--write`.
    ```sh
    sudo ip link set can0 type can bitrate 500000 listen-only on
    sudo ip link set can0 up
-   candump -l can0          # or: python -m vagtool -c can0 --debug info
+   candump -l can0          # or: vag-tool -c can0 --debug info
    ```
 
 3. Find the sequence:
 
    ```sh
-   python -m vagtool decode-log candump-*.log --only-writes
+   vag-tool decode-log candump-*.log --only-writes
    ```
 
    Everything that is not a known read-only service is flagged. The Coding-II
@@ -179,8 +208,8 @@ It only transmits with `--write`.
 4. Replay it:
 
    ```sh
-   python -m vagtool -c can0 raw '<the flagged request bytes>' --write
-   python -m vagtool -c can0 monitor --csv regen.csv
+   vag-tool -c can0 raw '<the flagged request bytes>' --write
+   vag-tool -c can0 monitor --csv regen.csv
    ```
 
 Replaying a captured write is still a write to the engine ECU. Read what you
@@ -201,41 +230,44 @@ captured before you send it.
   `freeze-frame` are the place to start:
 
   ```
-  $ python -m vagtool -c can0 dtc --labels /path/to/obdeleven/base.apk
+  $ vag-tool -c can0 dtc
   2 stored fault(s):
     P0471 (VAG 16855) - Exhaust Pressure Sensor "A" / Range/Performance [implausible signal] intermittent
     P2002 (VAG 18434) - Particulate Trap Bank 1 / Efficiency Below Threshold [lower limit not reached] static
 
-  $ python -m vagtool -c can0 freeze-frame
+  $ vag-tool -c can0 freeze-frame
     mileage             184233 km
     time stamp          2025-10-14 09:35:12
   ```
 
-  The descriptions come from VAG's text table, which ships inside the
-  OBDeleven APK as `assets/lang/en.json`; `--labels` reads it from your own
-  copy and nothing is bundled here.
-
 ## Layout
 
 ```
-vagtool/canbus.py     AF_CAN raw socket, plus an in-memory bus for tests
-vagtool/tp20.py       VW TP2.0: channel setup, framing, acks, keepalive
-vagtool/kwp2000.py    KWP2000 client, negative responses, response-pending
-vagtool/blocks.py     measuring block formula table and decoding
-vagtool/dpf.py        DPF snapshot, prerequisite checks, monitor + CSV
-vagtool/faults.py     fault code / status decoding, freeze frames, label lookup
-vagtool/logdecode.py  offline TP2.0 reassembly of a sniffed session
-vagtool/simecu.py     simulated PPD1 ECU
-vagtool/cli.py        command line interface
-docs/PROTOCOL.md      protocol reference: byte layouts and where each came from
-tests/test_offline.py whole stack against the simulator: python -m unittest discover -s tests -t .
+src/link.rs        the CAN link: an automotive adapter, or an in-memory pair for tests
+src/tp20.rs        VW TP2.0: channel setup, framing, acks, keepalive
+src/kwp2000.rs     KWP2000 client, VAG negative responses, identification, Coding-II
+src/blocks.rs      measuring block formula table and decoding
+src/dpf.rs         DPF snapshot, prerequisite checks, monitor + CSV
+src/faults.rs      fault code / status decoding, freeze frames, label lookup
+src/logdecode.rs   offline TP2.0 reassembly of a sniffed session
+src/simecu.rs      simulated PPD1 ECU
+src/main.rs        command line interface
+tests/offline.rs   whole stack against the simulator: cargo test
+
+tools/extract-labels/   standalone: VAG's text table out of an Android package
+src/modules.rs     the 89 VAG module addresses, by name
+assets/labels/<lang>.tsv  that table, sorted, which `dtc` reads by itself
+assets/labels-extra.tsv   codes the package lacks, folded in on extraction
 ```
+
+A Python implementation of the same tool is in the first commit, if the history
+is ever useful.
 
 ## Credit
 
 The TP2.0 framing follows jazdw's [write-up](https://jazdw.net/tp20) and the
-implementations in `RESEARCH/pq-flasher` (`tp20.py`, Panda-based) and
-`RESEARCH/teensycanbusdisplay` (`vwtpkwp2k.c`). The measuring block formula
+implementations in `pq-flasher` (`tp20.py`, Panda-based) and
+`teensycanbusdisplay` (`vwtpkwp2k.c`). The measuring block formula
 table is taken from those two projects — `jazdw/vag-blocks` (GPL-3.0, Jared
 Wiltshire) and `seishuku/teensycanbusdisplay` (Matt Williams). Formulas neither
 of them documents are left out: an unknown formula index is reported as a raw

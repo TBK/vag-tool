@@ -1,0 +1,18 @@
+#vag-labels 1
+#vag-lang de 5
+#vag-lang en 9
+#vag-note translated with the terms these tables already use: Ueberhitzung -> Overheating (MAS01961), Bremsscheibe -> Brake disc (C100600), Verschleiss -> Wear (IDE01385), Heckspoilermotor -> Rear spoiler motor (VAG03880), position first as in Feststellmotor links -> Left parking brake motor
+de	VAG04238	Überhitzung der Bremsflüssigkeit
+de	VAG04239	Überhitzung der Bremsscheibe
+de	VAG04240	Bremsscheibenverschleiß
+de	VAG04241	Heckspoilermotor links
+de	VAG04242	Heckspoilermotor rechts
+en	VAG04235	Brake pressure
+en	VAG04236	Freeze frame data
+en	VAG04237	oil aging
+en	VAG04238	Brake fluid overheating
+en	VAG04239	Brake disc overheating
+en	VAG04240	Brake disc wear
+en	VAG04241	Left rear spoiler motor
+en	VAG04242	Right rear spoiler motor
+en	VAG04244	Brake temperature management

@@ -1,5 +1,3 @@
-# Reference material: third-party clones, a 682 MB pile including retail
-# packages that are not ours to redistribute. See docs/PROTOCOL.md.
 RESEARCH/
 
 # Rust
@@ -11,3 +9,5 @@ __pycache__/
 
 # Logs from the car
 *.csv
+
+# Cargo lock is kept: this is a binary, not a library

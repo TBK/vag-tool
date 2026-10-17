@@ -1,0 +1,33 @@
+[package]
+name = "vag-tool"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.99"
+description = "KWP2000-over-TP2.0 diagnostics for VAG PQ35 cars (Audi A3 8P 2.0 TDI PD/BMN) over SocketCAN"
+license = "MIT"
+repository = "https://github.com/tbk/vag-tool"
+keywords = ["automotive", "can", "kwp2000", "tp20", "vag"]
+categories = ["command-line-utilities"]
+
+[workspace]
+members = ["tools/extract-labels"]
+
+[dependencies]
+# CAN layer: adapter-agnostic, so the same code works with the Korlan over
+# SocketCAN today and a panda/Vector/J2534 interface later.
+automotive = { version = "0.4", default-features = false, features = ["socketcan"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+hex = "0.4"
+# Only to restore the default SIGPIPE handler, which Rust masks; without it
+# piping into head or less panics instead of exiting.
+libc = "0.2"
+# No dependency for the VAG text table: `tools/extract-labels` writes it as a
+# sorted tab-separated file, and reading one is a `read` plus a binary search.
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+strip = true
